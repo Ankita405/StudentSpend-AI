@@ -34,3 +34,25 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+@"
+
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python cache files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Database files
+*.db
+*.sqlite3
+
+"@ | Add-Content .gitignore
