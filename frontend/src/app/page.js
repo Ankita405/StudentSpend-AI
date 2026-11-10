@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
@@ -11,7 +10,7 @@ import {
 } from "lucide-react";
 
 const API_URL = "http://127.0.0.1:8000";
-const MONTHLY_BUDGET = 8000;
+const DEFAULT_MONTHLY_BUDGET = 0;
 
 const navItems = [
   { label: "Dashboard", icon: LayoutDashboard, group: "GENERAL" },
@@ -45,6 +44,7 @@ function localDateString(date = new Date()) {
 
 function formatDate(date) {
   if (!date) return "";
+
   return new Date(`${date}T00:00:00`).toLocaleDateString("en-IN", {
     day: "2-digit",
     month: "short",
@@ -69,6 +69,7 @@ function getLastSevenDays(expenses) {
     date.setDate(date.getDate() - i);
 
     const dateKey = localDateString(date);
+
     const amount = expenses
       .filter(item => item.date === dateKey)
       .reduce((sum, item) => sum + item.amount, 0);
@@ -91,6 +92,14 @@ export default function Home() {
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
 
+  const [budgetLoading, setBudgetLoading] = useState(true);
+  const [budgetError, setBudgetError] = useState("");
+
+  const [monthlyBudget, setMonthlyBudget] = useState(DEFAULT_MONTHLY_BUDGET);
+  const [monthlyBudgetId, setMonthlyBudgetId] = useState(null);
+  const [budgetInput, setBudgetInput] = useState(String(DEFAULT_MONTHLY_BUDGET));
+  const [budgetSaving, setBudgetSaving] = useState(false);
+
   const [showAdd, setShowAdd] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -103,7 +112,7 @@ export default function Home() {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
 
-  // Fetch actual expenses from the backend database.
+  // Fetch expenses from backend.
   const fetchExpenses = useCallback(async () => {
     try {
       setApiError("");
@@ -128,6 +137,7 @@ export default function Home() {
       setTransactions(formatted);
     } catch (error) {
       console.error("Fetch error:", error);
+
       setApiError(
         "Unable to load expenses. Check that FastAPI is running at http://127.0.0.1:8000."
       );
@@ -136,11 +146,112 @@ export default function Home() {
     }
   }, []);
 
+  // Fetch current month's budget.
+  const fetchMonthlyBudget = useCallback(async () => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = today.getMonth() + 1;
+
+    try {
+      const response = await fetch(
+        `${API_URL}/budgets/monthly?year=${year}&month=${month}`
+      );
+
+      if (response.status === 404) {
+        setMonthlyBudgetId(null);
+        setMonthlyBudget(DEFAULT_MONTHLY_BUDGET);
+        setBudgetInput(String(DEFAULT_MONTHLY_BUDGET));
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Budget API returned status ${response.status}`);
+      }
+
+      const data = await response.json();
+      const budget = Array.isArray(data) ? data[0] : data;
+
+      if (budget && budget.amount !== undefined) {
+        setMonthlyBudgetId(budget.id ?? null);
+        setMonthlyBudget(Number(budget.amount));
+        setBudgetInput(String(budget.amount));
+      } else {
+        setMonthlyBudgetId(null);
+        setMonthlyBudget(DEFAULT_MONTHLY_BUDGET);
+        setBudgetInput(String(DEFAULT_MONTHLY_BUDGET));
+      }
+    } catch (error) {
+      console.error("Monthly budget fetch error:", error);
+
+      setApiError(
+        "Unable to load the monthly budget. Please check that the backend is running."
+      );
+    } finally {
+      setBudgetLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchExpenses();
-  }, [fetchExpenses]);
+    fetchMonthlyBudget();
+  }, [fetchExpenses, fetchMonthlyBudget]);
 
-  // Current month expenses.
+  // Save or update monthly budget.
+  async function saveMonthlyBudget(event) {
+    event.preventDefault();
+
+    const amount = Number(budgetInput);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setApiError("Please enter a valid budget amount greater than zero.");
+      return;
+    }
+
+    const today = new Date();
+
+    const payload = {
+      year: today.getFullYear(),
+      month: today.getMonth() + 1,
+      amount
+    };
+
+    setBudgetSaving(true);
+    setApiError("");
+
+    try {
+      const url = monthlyBudgetId
+        ? `${API_URL}/budgets/monthly/${monthlyBudgetId}`
+        : `${API_URL}/budgets/monthly`;
+
+      const response = await fetch(url, {
+        method: monthlyBudgetId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+
+        throw new Error(
+          typeof errorData.detail === "string"
+            ? errorData.detail
+            : `Could not save monthly budget (status ${response.status}).`
+        );
+      }
+
+      const savedBudget = await response.json();
+
+      setMonthlyBudgetId(savedBudget.id ?? monthlyBudgetId);
+      setMonthlyBudget(Number(savedBudget.amount ?? amount));
+      setBudgetInput(String(savedBudget.amount ?? amount));
+    } catch (error) {
+      setApiError(error.message || "Unable to save monthly budget.");
+    } finally {
+      setBudgetSaving(false);
+    }
+  }
+
+  // Calculate current month's expenses.
   const currentMonth = localDateString().slice(0, 7);
 
   const monthlyTransactions = transactions.filter(item =>
@@ -152,14 +263,13 @@ export default function Home() {
     0
   );
 
-  const remainingBudget = Math.max(MONTHLY_BUDGET - totalSpent, 0);
+  const remainingBudget = Math.max(monthlyBudget - totalSpent, 0);
 
-  const budgetPercentage = Math.min(
-    (totalSpent / MONTHLY_BUDGET) * 100,
-    100
-  );
+  const budgetPercentage = monthlyBudget > 0
+    ? Math.min((totalSpent / monthlyBudget) * 100, 100)
+    : 0;
 
-  // Actual category-wise database totals.
+  // Category-wise spending.
   const categories = categoryOptions.map(category => {
     const amount = monthlyTransactions
       .filter(item => item.category === category.name)
@@ -168,8 +278,9 @@ export default function Home() {
     return { ...category, amount };
   });
 
-  // Actual daily spending for the last seven days.
+  // Last seven days spending.
   const dailySpending = getLastSevenDays(transactions);
+
   const maxDailySpending = Math.max(
     ...dailySpending.map(item => item.amount),
     1
@@ -201,6 +312,7 @@ export default function Home() {
 
       if (!response.ok) {
         const errorData = await response.json();
+
         throw new Error(
           typeof errorData.detail === "string"
             ? errorData.detail
@@ -223,7 +335,7 @@ export default function Home() {
     }
   }
 
-  // Delete an expense from the database.
+  // Delete expense from database.
   async function deleteTransaction(id) {
     const confirmed = window.confirm(
       "Are you sure you want to delete this transaction?"
@@ -251,7 +363,7 @@ export default function Home() {
     }
   }
 
-  // Basic response using actual recorded data, not a connected AI model.
+  // Basic database-based assistant.
   function askAssistant(event) {
     event.preventDefault();
 
@@ -259,7 +371,7 @@ export default function Home() {
 
     setAnswer(
       `Your recorded spending this month is ${money(totalSpent)}. ` +
-      `Your monthly budget is ${money(MONTHLY_BUDGET)}. ` +
+      `Your monthly budget is ${money(monthlyBudget)}. ` +
       `You have ${money(remainingBudget)} remaining.`
     );
 
@@ -273,7 +385,9 @@ export default function Home() {
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="brand">
           <div className="brand-icon">S</div>
-          <span>Student<span className="brand-accent">Spend</span></span>
+          <span>
+            Student<span className="brand-accent">Spend</span>
+          </span>
         </div>
 
         <div className="profile-mini">
@@ -319,11 +433,12 @@ export default function Home() {
             <span>Help & Support</span>
           </button>
 
-          <div className="sidebar-footer">StudentSpend AI © 2026</div>
+          <div className="sidebar-footer">
+            StudentSpend AI © 2026
+          </div>
         </div>
       </aside>
-
-      {/* MAIN AREA */}
+            {/* MAIN AREA */}
       <section className="main-area">
         <header className="topbar">
           <div className="topbar-left">
@@ -359,404 +474,541 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="dashboard-content">
+        {activeNav === "Dashboard" ? (
+          <div className="dashboard-content">
 
-          {/* WELCOME */}
-          <div className="welcome-row">
-            <div>
-              <h1>Welcome back! <span>✦</span></h1>
-              <p>Here's what's happening with your money today.</p>
+            {/* WELCOME */}
+            <div className="welcome-row">
+              <div>
+                <h1>Welcome back! <span>✦</span></h1>
+                <p>Here's what's happening with your money today.</p>
+              </div>
+
+              <button
+                className="primary-button"
+                onClick={() => setShowAdd(true)}
+              >
+                <Plus size={18} /> Add Transaction
+              </button>
             </div>
 
-            <button
-              className="primary-button"
-              onClick={() => setShowAdd(true)}
-            >
-              <Plus size={18} /> Add Transaction
-            </button>
-          </div>
+            {apiError && (
+              <div style={{
+                padding: "12px",
+                marginBottom: "16px",
+                background: "#ffe8e8",
+                color: "#b42318",
+                borderRadius: "8px"
+              }}>
+                {apiError}
+              </div>
+            )}
 
-          {apiError && (
-            <div style={{
-              padding: "12px",
-              marginBottom: "16px",
-              background: "#ffe8e8",
-              color: "#b42318",
-              borderRadius: "8px"
-            }}>
-              {apiError}
-            </div>
-          )}
+            {/* SUMMARY CARDS */}
+            <div className="summary-grid">
 
-          {/* SUMMARY CARDS */}
-          <div className="summary-grid">
-
-            <div className="summary-card">
-              <div className="card-top">
-                <span>Total Balance</span>
-                <div className="stat-icon purple">
-                  <Wallet size={20} />
+              <div className="summary-card">
+                <div className="card-top">
+                  <span>Total Balance</span>
+                  <div className="stat-icon purple">
+                    <Wallet size={20} />
+                  </div>
+                </div>
+                <h2>Not set</h2>
+                <div className="stat-footer neutral">
+                  Add income details to calculate balance
                 </div>
               </div>
-              <h2>Not set</h2>
-              <div className="stat-footer neutral">
-                Add income details to calculate balance
+
+              <div className="summary-card">
+                <div className="card-top">
+                  <span>Monthly Spending</span>
+                  <div className="stat-icon pink">
+                    <ArrowDownRight size={20} />
+                  </div>
+                </div>
+                <h2>{money(totalSpent)}</h2>
+                <div className="stat-footer neutral">
+                  {loading ? "Loading expenses..." : "From database records"}
+                </div>
+              </div>
+
+              <div className="summary-card">
+                <div className="card-top">
+                  <span>Monthly Savings</span>
+                  <div className="stat-icon green">
+                    <PiggyBank size={20} />
+                  </div>
+                </div>
+                <h2>Not set</h2>
+                <div className="stat-footer neutral">
+                  Add savings details to calculate
+                </div>
+              </div>
+
+              <div className="summary-card">
+                <div className="card-top">
+                  <span>Monthly Budget</span>
+                  <div className="stat-icon blue">
+                    <Target size={20} />
+                  </div>
+                </div>
+                <h2>{money(monthlyBudget)}</h2>
+                <div className="budget-mini">
+                  <div className="progress-track">
+                    <div
+                      className="progress-fill purple-fill"
+                      style={{ width: `${budgetPercentage}%` }}
+                    />
+                  </div>
+                  <small>{Math.round(budgetPercentage)}% used</small>
+                </div>
               </div>
             </div>
 
-            <div className="summary-card">
-              <div className="card-top">
-                <span>Monthly Spending</span>
-                <div className="stat-icon pink">
-                  <ArrowDownRight size={20} />
-                </div>
-              </div>
-              <h2>{money(totalSpent)}</h2>
-              <div className="stat-footer neutral">
-                {loading ? "Loading expenses..." : "From database records"}
-              </div>
-            </div>
+            {/* CHART AND BUDGET */}
+            <div className="two-column-grid">
 
-            <div className="summary-card">
-              <div className="card-top">
-                <span>Monthly Savings</span>
-                <div className="stat-icon green">
-                  <PiggyBank size={20} />
+              <div className="panel spending-panel">
+                <div className="panel-header">
+                  <div>
+                    <h3>Spending Overview</h3>
+                    <p>Actual spending over the last 7 days</p>
+                  </div>
                 </div>
-              </div>
-              <h2>Not set</h2>
-              <div className="stat-footer neutral">
-                Add savings details to calculate
-              </div>
-            </div>
 
-            <div className="summary-card">
-              <div className="card-top">
-                <span>Monthly Budget</span>
-                <div className="stat-icon blue">
-                  <Target size={20} />
+                <div className="chart-total">
+                  <h2>{money(totalSpent)}</h2>
+                  <span>Current month's recorded spending</span>
                 </div>
+
+                <div className="bar-chart">
+                  {dailySpending.map(item => (
+                    <div className="bar-column" key={item.date}>
+                      <div className="bar-value">{money(item.amount)}</div>
+                      <div className="bar-track">
+                        <div
+                          className="bar"
+                          style={{
+                            height: `${Math.max(
+                              item.amount > 0
+                                ? (item.amount / maxDailySpending) * 100
+                                : 0,
+                              item.amount > 0 ? 5 : 0
+                            )}%`
+                          }}
+                        />
+                      </div>
+                      <span>{item.day}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <small style={{ color: "#999" }}>
+                  Chart calculated from your saved transactions.
+                </small>
               </div>
-              <h2>{money(MONTHLY_BUDGET)}</h2>
-              <div className="budget-mini">
-                <div className="progress-track">
+
+              {/* MONTHLY BUDGET PANEL */}
+              <div className="panel budget-panel">
+                <div className="panel-header">
+                  <div>
+                    <h3>Monthly Budget</h3>
+                    <p>Your spending limit</p>
+                  </div>
+                  <CalendarDays size={19} className="muted-icon" />
+                </div>
+
+                <div className="budget-amount">
+                  <h2>{money(totalSpent)}</h2>
+                  <span>of {money(monthlyBudget)}</span>
+                </div>
+
+                <div className="progress-track large">
                   <div
                     className="progress-fill purple-fill"
                     style={{ width: `${budgetPercentage}%` }}
                   />
                 </div>
-                <small>{Math.round(budgetPercentage)}% used</small>
-              </div>
-            </div>
-          </div>
 
-          {/* CHART AND BUDGET */}
-          <div className="two-column-grid">
-
-            <div className="panel spending-panel">
-              <div className="panel-header">
-                <div>
-                  <h3>Spending Overview</h3>
-                  <p>Actual spending over the last 7 days</p>
-                </div>
-              </div>
-
-              <div className="chart-total">
-                <h2>{money(totalSpent)}</h2>
-                <span>Current month's recorded spending</span>
-              </div>
-
-              <div className="bar-chart">
-                {dailySpending.map(item => (
-                  <div className="bar-column" key={item.date}>
-                    <div className="bar-value">{money(item.amount)}</div>
-                    <div className="bar-track">
-                      <div
-                        className="bar"
-                        style={{
-                          height: `${Math.max(
-                            item.amount > 0
-                              ? (item.amount / maxDailySpending) * 100
-                              : 0,
-                            item.amount > 0 ? 5 : 0
-                          )}%`
-                        }}
-                      />
-                    </div>
-                    <span>{item.day}</span>
+                <div className="budget-info">
+                  <div>
+                    <small>Spent</small>
+                    <strong>{money(totalSpent)}</strong>
                   </div>
-                ))}
-              </div>
 
-              <small style={{ color: "#999" }}>
-                Chart calculated from your saved transactions.
-              </small>
+                  <div>
+                    <small>Remaining</small>
+                    <strong className="green-text">
+                      {money(remainingBudget)}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="budget-note">
+                  <Sparkles size={17} />
+                  <span>
+                    {totalSpent > monthlyBudget
+                      ? "You have exceeded your monthly budget."
+                      : "Keep tracking your expenses to stay within your budget."}
+                  </span>
+                </div>
+
+                {/* UPDATE MONTHLY BUDGET */}
+                <form onSubmit={saveMonthlyBudget} className="budget-edit-form">
+                  <label htmlFor="monthly-budget-input">
+                    Set monthly budget (₹)
+                  </label>
+
+                  <div style={{
+                    display: "flex",
+                    gap: "8px",
+                    marginTop: "8px"
+                  }}>
+                    <input
+                      id="monthly-budget-input"
+                      type="number"
+                      min="1"
+                      step="0.01"
+                      value={budgetInput}
+                      onChange={event => setBudgetInput(event.target.value)}
+                      required
+                      style={{
+                        minWidth: 0,
+                        flex: 1,
+                        padding: "10px",
+                        border: "1px solid #d7dce5",
+                        borderRadius: "8px"
+                      }}
+                    />
+
+                    <button
+                      type="submit"
+                      className="primary-button"
+                      disabled={budgetSaving}
+                    >
+                      {budgetSaving ? "Saving..." : "Update"}
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
 
-            <div className="panel budget-panel">
-              <div className="panel-header">
-                <div>
-                  <h3>Monthly Budget</h3>
-                  <p>Your spending limit</p>
-                </div>
-                <CalendarDays size={19} className="muted-icon" />
-              </div>
+            {/* CATEGORIES AND SAVINGS */}
+            <div className="two-column-grid">
 
-              <div className="budget-amount">
-                <h2>{money(totalSpent)}</h2>
-                <span>of {money(MONTHLY_BUDGET)}</span>
-              </div>
-
-              <div className="progress-track large">
-                <div
-                  className="progress-fill purple-fill"
-                  style={{ width: `${budgetPercentage}%` }}
-                />
-              </div>
-
-              <div className="budget-info">
-                <div>
-                  <small>Spent</small>
-                  <strong>{money(totalSpent)}</strong>
+              <div className="panel">
+                <div className="panel-header">
+                  <div>
+                    <h3>Expense Categories</h3>
+                    <p>Actual category-wise spending this month</p>
+                  </div>
                 </div>
 
-                <div>
-                  <small>Remaining</small>
-                  <strong className="green-text">
-                    {money(remainingBudget)}
-                  </strong>
-                </div>
-              </div>
+                <div className="category-list">
+                  {categories.map(category => {
+                    const Icon = category.icon;
+                    const percentage = totalSpent > 0
+                      ? (category.amount / totalSpent) * 100
+                      : 0;
 
-              <div className="budget-note">
-                <Sparkles size={17} />
-                <span>
-                  {totalSpent > MONTHLY_BUDGET
-                    ? "You have exceeded your monthly budget."
-                    : "Keep tracking your expenses to stay within your budget."}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* CATEGORIES AND SAVINGS */}
-          <div className="two-column-grid">
-
-            <div className="panel">
-              <div className="panel-header">
-                <div>
-                  <h3>Expense Categories</h3>
-                  <p>Actual category-wise spending this month</p>
-                </div>
-              </div>
-
-              <div className="category-list">
-                {categories.map(category => {
-                  const Icon = category.icon;
-                  const percentage = totalSpent > 0
-                    ? (category.amount / totalSpent) * 100
-                    : 0;
-
-                  return (
-                    <div className="category-row" key={category.name}>
-                      <div
-                        className="category-icon"
-                        style={{
-                          color: category.color,
-                          background: `${category.color}18`
-                        }}
-                      >
-                        <Icon size={19} />
-                      </div>
-
-                      <div className="category-details">
-                        <div className="category-title">
-                          <strong>{category.name}</strong>
-                          <span>{money(category.amount)}</span>
+                    return (
+                      <div className="category-row" key={category.name}>
+                        <div
+                          className="category-icon"
+                          style={{
+                            color: category.color,
+                            background: `${category.color}18`
+                          }}
+                        >
+                          <Icon size={19} />
                         </div>
 
-                        <div className="progress-track">
-                          <div
-                            className="progress-fill"
-                            style={{
-                              width: `${percentage}%`,
-                              background: category.color
-                            }}
-                          />
+                        <div className="category-details">
+                          <div className="category-title">
+                            <strong>{category.name}</strong>
+                            <span>{money(category.amount)}</span>
+                          </div>
+
+                          <div className="progress-track">
+                            <div
+                              className="progress-fill"
+                              style={{
+                                width: `${percentage}%`,
+                                background: category.color
+                              }}
+                            />
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="panel savings-panel">
+                <div className="panel-header">
+                  <div>
+                    <h3>Savings Goals</h3>
+                    <p>Set goals to track your progress</p>
+                  </div>
+                  <Target size={20} className="muted-icon" />
+                </div>
+
+                <div style={{ padding: "24px 0" }}>
+                  <div className="goal-icon purple">
+                    <GraduationCap size={25} />
+                  </div>
+                  <h3>No savings goals added</h3>
+                  <p>
+                    Your savings goals will appear here after you add
+                    their target amounts and saved amounts.
+                  </p>
+                </div>
+              </div>
+            </div>
+                        {/* SUSTAINABILITY AND ASSISTANT */}
+            <div className="two-column-grid">
+
+              <div className="panel sustainability-panel">
+                <div className="panel-header">
+                  <div>
+                    <h3>Sustainability Dashboard</h3>
+                    <p>Track the environmental impact of your purchases</p>
+                  </div>
+                  <div className="stat-icon green">
+                    <Leaf size={20} />
+                  </div>
+                </div>
+
+                <div style={{ padding: "24px 0" }}>
+                  <h3>Environmental data not available yet</h3>
+                  <p>
+                    We will show environmental estimates after adding
+                    product-level sustainability data and calculation rules.
+                  </p>
+                </div>
+              </div>
+
+              <div className="panel assistant-panel">
+                <div className="panel-header">
+                  <div>
+                    <h3>AI Assistant</h3>
+                    <p>Your personal finance helper</p>
+                  </div>
+                  <div className="stat-icon purple">
+                    <Bot size={21} />
+                  </div>
+                </div>
+
+                <div className="assistant-message">
+                  <div className="assistant-avatar">
+                    <Bot size={20} />
+                  </div>
+                  <p>
+                    Hello! Ask me about your recorded spending and monthly budget.
+                  </p>
+                </div>
+
+                {answer && (
+                  <div className="assistant-answer">{answer}</div>
+                )}
+
+                <form className="assistant-input" onSubmit={askAssistant}>
+                  <input
+                    value={question}
+                    onChange={e => setQuestion(e.target.value)}
+                    placeholder="Ask about your expenses..."
+                  />
+                  <button type="submit">
+                    <Send size={17} />
+                  </button>
+                </form>
+
+                <small className="demo-note">
+                  Basic database-based assistant · AI model integration pending
+                </small>
               </div>
             </div>
 
-            <div className="panel savings-panel">
+            {/* RECENT TRANSACTIONS */}
+            <div className="panel transactions-panel">
               <div className="panel-header">
                 <div>
-                  <h3>Savings Goals</h3>
-                  <p>Set goals to track your progress</p>
+                  <h3>Transactions</h3>
+                  <p>Expenses saved in your database</p>
                 </div>
-                <Target size={20} className="muted-icon" />
-              </div>
 
-              <div style={{ padding: "24px 0" }}>
-                <div className="goal-icon purple">
-                  <GraduationCap size={25} />
-                </div>
-                <h3>No savings goals added</h3>
-                <p>
-                  Your savings goals will appear here after you add
-                  their target amounts and saved amounts.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* SUSTAINABILITY AND ASSISTANT */}
-          <div className="two-column-grid">
-
-            <div className="panel sustainability-panel">
-              <div className="panel-header">
-                <div>
-                  <h3>Sustainability Dashboard</h3>
-                  <p>Track the environmental impact of your purchases</p>
-                </div>
-                <div className="stat-icon green">
-                  <Leaf size={20} />
-                </div>
-              </div>
-
-              <div style={{ padding: "24px 0" }}>
-                <h3>Environmental data not available yet</h3>
-                <p>
-                  We will show environmental estimates after adding
-                  product-level sustainability data and calculation rules.
-                </p>
-              </div>
-            </div>
-
-            <div className="panel assistant-panel">
-              <div className="panel-header">
-                <div>
-                  <h3>AI Assistant</h3>
-                  <p>Your personal finance helper</p>
-                </div>
-                <div className="stat-icon purple">
-                  <Bot size={21} />
-                </div>
-              </div>
-
-              <div className="assistant-message">
-                <div className="assistant-avatar">
-                  <Bot size={20} />
-                </div>
-                <p>
-                  Hello! Ask me about your recorded spending and monthly budget.
-                </p>
-              </div>
-
-              {answer && (
-                <div className="assistant-answer">{answer}</div>
-              )}
-
-              <form className="assistant-input" onSubmit={askAssistant}>
-                <input
-                  value={question}
-                  onChange={e => setQuestion(e.target.value)}
-                  placeholder="Ask about your expenses..."
-                />
-                <button type="submit">
-                  <Send size={17} />
+                <button
+                  className="text-button"
+                  onClick={() => setShowAdd(true)}
+                >
+                  Add new
                 </button>
-              </form>
+              </div>
 
-              <small className="demo-note">
-                Basic database-based assistant · AI model integration pending
-              </small>
+              {loading ? (
+                <p style={{ padding: "20px" }}>Loading transactions...</p>
+              ) : transactions.length === 0 ? (
+                <p style={{ padding: "20px" }}>
+                  No expenses found. Click Add Transaction to record your first expense.
+                </p>
+              ) : (
+                <div className="transaction-table">
+                  <div className="table-heading">
+                    <span>TRANSACTION</span>
+                    <span>CATEGORY</span>
+                    <span>DATE</span>
+                    <span>AMOUNT</span>
+                    <span>ACTION</span>
+                  </div>
+
+                  {transactions.map(transaction => {
+                    const Icon = getCategoryIcon(transaction.category);
+
+                    return (
+                      <div className="transaction-row" key={transaction.id}>
+                        <div className="transaction-name">
+                          <div className="transaction-icon purple">
+                            <Icon size={19} />
+                          </div>
+                          <strong>{transaction.name}</strong>
+                        </div>
+
+                        <span className="table-category">
+                          {transaction.category}
+                        </span>
+
+                        <span className="table-date">
+                          {formatDate(transaction.date)}
+                        </span>
+
+                        <strong className="expense-amount">
+                          -{money(transaction.amount)}
+                        </strong>
+
+                        <button
+                          className="more-button"
+                          title="Delete transaction"
+                          disabled={deletingId === transaction.id}
+                          onClick={() => deleteTransaction(transaction.id)}
+                        >
+                          {deletingId === transaction.id
+                            ? "..."
+                            : <Trash2 size={17} />}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
+
+            <footer className="page-footer">
+              StudentSpend AI · Manage money wisely, live sustainably.
+            </footer>
           </div>
 
-          {/* RECENT TRANSACTIONS */}
-          <div className="panel transactions-panel">
-            <div className="panel-header">
+        ) : activeNav === "Transactions" ? (
+          <div className="dashboard-content">
+            <div className="welcome-row">
               <div>
-                <h3>Transactions</h3>
-                <p>Expenses saved in your database</p>
+                <h1>Transactions</h1>
+                <p>Manage all your saved expenses.</p>
               </div>
 
               <button
-                className="text-button"
+                className="primary-button"
                 onClick={() => setShowAdd(true)}
               >
-                Add new
+                <Plus size={18} /> Add Transaction
               </button>
             </div>
 
-            {loading ? (
-              <p style={{ padding: "20px" }}>Loading transactions...</p>
-            ) : transactions.length === 0 ? (
-              <p style={{ padding: "20px" }}>
-                No expenses found. Click Add Transaction to record your first expense.
-              </p>
-            ) : (
-              <div className="transaction-table">
-                <div className="table-heading">
-                  <span>TRANSACTION</span>
-                  <span>CATEGORY</span>
-                  <span>DATE</span>
-                  <span>AMOUNT</span>
-                  <span>ACTION</span>
-                </div>
-
-                {transactions.map(transaction => {
-                  const Icon = getCategoryIcon(transaction.category);
-
-                  return (
-                    <div className="transaction-row" key={transaction.id}>
-                      <div className="transaction-name">
-                        <div className="transaction-icon purple">
-                          <Icon size={19} />
-                        </div>
-                        <strong>{transaction.name}</strong>
-                      </div>
-
-                      <span className="table-category">
-                        {transaction.category}
-                      </span>
-
-                      <span className="table-date">
-                        {formatDate(transaction.date)}
-                      </span>
-
-                      <strong className="expense-amount">
-                        -{money(transaction.amount)}
-                      </strong>
-
-                      <button
-                        className="more-button"
-                        title="Delete transaction"
-                        disabled={deletingId === transaction.id}
-                        onClick={() => deleteTransaction(transaction.id)}
-                      >
-                        {deletingId === transaction.id
-                          ? "..."
-                          : <Trash2 size={17} />}
-                      </button>
-                    </div>
-                  );
-                })}
+            {apiError && (
+              <div style={{
+                padding: "12px",
+                marginBottom: "16px",
+                background: "#ffe8e8",
+                color: "#b42318",
+                borderRadius: "8px"
+              }}>
+                {apiError}
               </div>
             )}
+
+            <div className="panel transactions-panel">
+              <div className="panel-header">
+                <div>
+                  <h3>All Transactions</h3>
+                  <p>{transactions.length} recorded transactions</p>
+                </div>
+              </div>
+
+              {loading ? (
+                <p style={{ padding: "20px" }}>Loading transactions...</p>
+              ) : transactions.length === 0 ? (
+                <p style={{ padding: "20px" }}>No transactions found.</p>
+              ) : (
+                <div className="transaction-table">
+                  <div className="table-heading">
+                    <span>TRANSACTION</span>
+                    <span>CATEGORY</span>
+                    <span>DATE</span>
+                    <span>AMOUNT</span>
+                    <span>ACTION</span>
+                  </div>
+
+                  {transactions.map(transaction => {
+                    const Icon = getCategoryIcon(transaction.category);
+
+                    return (
+                      <div className="transaction-row" key={transaction.id}>
+                        <div className="transaction-name">
+                          <div className="transaction-icon purple">
+                            <Icon size={19} />
+                          </div>
+                          <strong>{transaction.name}</strong>
+                        </div>
+
+                        <span className="table-category">
+                          {transaction.category}
+                        </span>
+
+                        <span className="table-date">
+                          {formatDate(transaction.date)}
+                        </span>
+
+                        <strong className="expense-amount">
+                          -{money(transaction.amount)}
+                        </strong>
+
+                        <button
+                          className="more-button"
+                          title="Delete transaction"
+                          disabled={deletingId === transaction.id}
+                          onClick={() => deleteTransaction(transaction.id)}
+                        >
+                          {deletingId === transaction.id
+                            ? "..."
+                            : <Trash2 size={17} />}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
-          <footer className="page-footer">
-            StudentSpend AI · Manage money wisely, live sustainably.
-          </footer>
-        </div>
+        ) : (
+          <div className="dashboard-content">
+            <h1>{activeNav}</h1>
+            <p>This section is coming soon.</p>
+          </div>
+        )}
       </section>
-
-      {/* ADD TRANSACTION MODAL */}
+            {/* ADD TRANSACTION MODAL */}
       {showAdd && (
         <div
           className="modal-overlay"
@@ -768,6 +1020,7 @@ export default function Home() {
           >
             <div className="modal-header">
               <h3>Add Transaction</h3>
+
               <button
                 className="icon-button"
                 onClick={() => setShowAdd(false)}
