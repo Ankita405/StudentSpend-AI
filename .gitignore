@@ -9,14 +9,6 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
-env/
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Database files
-*.db
-*.sqlite3
 
 # Next.js
 node_modules/
@@ -37,3 +29,30 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+@"
+
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python cache files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Database files
+*.db
+*.sqlite3
+
+"@ | Add-Content .gitignore
