@@ -9,7 +9,7 @@ import {
   Sparkles, PiggyBank, Coffee, GraduationCap, Trash2
 } from "lucide-react";
 
-const API_URL = "http://127.0.0.1:8000";
+const API_URL = "https://studentspend-ai-nbcd.onrender.com";
 const DEFAULT_MONTHLY_BUDGET = 0;
 
 // Automatically attach JWT token to backend API requests
@@ -299,7 +299,7 @@ export default function Home() {
       console.error("Fetch error:", error);
 
       setApiError(
-        "Unable to load expenses. Check that FastAPI is running at http://127.0.0.1:8000."
+        "Unable to load expenses. Check that FastAPI is running at https://studentspend-ai-nbcd.onrender.com"
       );
     } finally {
       setLoading(false);
