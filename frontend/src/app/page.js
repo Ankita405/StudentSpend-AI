@@ -271,6 +271,17 @@ export default function Home() {
       setAuthLoading(false);
     }
   }
+  // Logout Function
+function handleLogout() {
+  localStorage.removeItem("studentSpendToken");
+  localStorage.removeItem("studentSpendProfile");
+
+  setIsLoggedIn(false);
+  setAuthMode("login");
+  setAuthError("");
+  setAuthEmail("");
+  setAuthPassword("");
+}
 
   // Fetch expenses from backend.
   const fetchExpenses = useCallback(async () => {
@@ -986,6 +997,13 @@ export default function Home() {
                 <Plus size={18} /> Add Transaction
               </button>
             </div>
+            <button
+  className="primary-button"
+  onClick={handleLogout}
+  style={{ background: "#dc3545" }}
+>
+  Logout
+</button>
 
             {apiError && (
               <div style={{
