@@ -64,7 +64,8 @@ app.add_middleware(
     "http://localhost:3000",
     "https://studentspend-ai-deploy.vercel.app",
     "https://studentspend-ai-deploy-ewtmmvkht-ankita-22ca.vercel.app",
-    "https://studentspend-ai-deploy-7kys3v4ax-ankita-22ca.vercel.app"
+    "https://studentspend-ai-deploy-7kys3v4ax-ankita-22ca.vercel.app",
+    "https://studentspend-ai-deploy-nrbnnns9e-ankita-22ca.vercel.app"
 ],
     allow_credentials=True,
     allow_methods=["*"],
